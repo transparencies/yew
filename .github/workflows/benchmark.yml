@@ -118,6 +118,9 @@ jobs:
           npm start &
           sleep 5
 
+      # https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md
+      - run: echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+
       - name: Run js-framework-benchmark/webdriver-ts npm run bench
         working-directory: js-framework-benchmark/webdriver-ts
         run: xvfb-run npm run bench -- --framework keyed/yew keyed/yew-hooks --runner playwright --chromeBinary "${{ steps.setup-chrome.outputs.chrome-path }}"
