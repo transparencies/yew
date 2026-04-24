@@ -816,3 +816,169 @@ async fn test_duplicate_suspension() {
     let result = obtain_result();
     assert_eq!(result.as_str(), "hello!");
 }
+
+// Regression test for https://github.com/yewstack/yew/issues/3780
+// use_future causes use_effect to fire before DOM is updated, so
+// document.get_element_by_id returns None for elements the component renders.
+#[wasm_bindgen_test]
+async fn use_effect_can_access_dom_after_use_future_resolves() {
+    #[derive(Properties, Clone)]
+    struct ContentProps {
+        dom_observed: Rc<RefCell<Option<bool>>>,
+    }
+
+    impl PartialEq for ContentProps {
+        fn eq(&self, _other: &Self) -> bool {
+            true
+        }
+    }
+
+    #[component(Content)]
+    fn content(props: &ContentProps) -> HtmlResult {
+        use_future(|| async {
+            sleep(Duration::ZERO).await;
+        })?;
+
+        {
+            let dom_observed = props.dom_observed.clone();
+            use_effect_with((), move |_| {
+                let element = gloo::utils::document().get_element_by_id("foo");
+                *dom_observed.borrow_mut() = Some(element.is_some());
+                || {}
+            });
+        }
+
+        Ok(html! {
+            <div id="result">
+                <div id="foo"></div>
+            </div>
+        })
+    }
+
+    #[derive(Properties, Clone)]
+    struct AppProps {
+        dom_observed: Rc<RefCell<Option<bool>>>,
+    }
+
+    impl PartialEq for AppProps {
+        fn eq(&self, _other: &Self) -> bool {
+            true
+        }
+    }
+
+    #[component(App)]
+    fn app(props: &AppProps) -> Html {
+        html! {
+            <Suspense fallback={html! {<div>{"loading"}</div>}}>
+                <Content dom_observed={props.dom_observed.clone()} />
+            </Suspense>
+        }
+    }
+
+    let dom_observed: Rc<RefCell<Option<bool>>> = Rc::new(RefCell::new(None));
+
+    yew::Renderer::<App>::with_root_and_props(
+        gloo::utils::document().get_element_by_id("output").unwrap(),
+        AppProps {
+            dom_observed: dom_observed.clone(),
+        },
+    )
+    .render();
+
+    // After everything settles (suspension resolves, component renders, effects run),
+    // use_effect should have found the #foo element in the DOM.
+    //
+    // Bug (issue #3780): use_effect fires before the DOM is updated when use_future
+    // is involved, so get_element_by_id("foo") returns None and dom_observed is Some(false).
+    // Expected: use_effect fires after the DOM is committed, so dom_observed should be
+    // Some(true).
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        *dom_observed.borrow(),
+        Some(true),
+        "use_effect should see the rendered DOM element after use_future resolves"
+    );
+}
+
+// Companion to #3780: when multiple siblings under the same <Suspense> each
+// suspend independently and resume at different times, every child's effect
+// must see the DOM in the live tree, not the detached parent where Suspense
+// parks children while at least one of them is still pending.
+#[wasm_bindgen_test]
+async fn sibling_suspensions_effects_see_dom() {
+    #[derive(Properties, Clone)]
+    struct ChildProps {
+        id: &'static str,
+        observed: Rc<RefCell<Vec<(&'static str, bool)>>>,
+    }
+
+    impl PartialEq for ChildProps {
+        fn eq(&self, other: &Self) -> bool {
+            self.id == other.id
+        }
+    }
+
+    #[component(Child)]
+    fn child(props: &ChildProps) -> HtmlResult {
+        use_future(|| async {
+            sleep(Duration::ZERO).await;
+        })?;
+
+        let id = props.id;
+        let observed = props.observed.clone();
+        use_effect_with((), move |_| {
+            let found = gloo::utils::document().get_element_by_id(id).is_some();
+            observed.borrow_mut().push((id, found));
+            || {}
+        });
+
+        Ok(html! { <div id={id}></div> })
+    }
+
+    #[derive(Properties, Clone)]
+    struct AppProps {
+        observed: Rc<RefCell<Vec<(&'static str, bool)>>>,
+    }
+
+    impl PartialEq for AppProps {
+        fn eq(&self, _other: &Self) -> bool {
+            true
+        }
+    }
+
+    #[component(App)]
+    fn app(props: &AppProps) -> Html {
+        html! {
+            <Suspense fallback={html! { <div>{"loading"}</div> }}>
+                <Child id="sib-a" observed={props.observed.clone()} />
+                <Child id="sib-b" observed={props.observed.clone()} />
+            </Suspense>
+        }
+    }
+
+    let observed: Rc<RefCell<Vec<(&'static str, bool)>>> = Rc::new(RefCell::new(Vec::new()));
+    yew::Renderer::<App>::with_root_and_props(
+        gloo::utils::document().get_element_by_id("output").unwrap(),
+        AppProps {
+            observed: observed.clone(),
+        },
+    )
+    .render();
+
+    sleep(Duration::from_millis(100)).await;
+
+    let observed = observed.borrow();
+    assert_eq!(
+        observed.len(),
+        2,
+        "both sibling effects should fire exactly once: {:?}",
+        *observed
+    );
+    for (id, found) in observed.iter() {
+        assert!(
+            *found,
+            "effect for {} did not see DOM in live tree: {:?}",
+            id, *observed
+        );
+    }
+}
