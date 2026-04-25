@@ -1,28 +1,18 @@
-use proc_macro2::{Ident, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::buffer::Cursor;
 use syn::parse::{Parse, ParseStream};
-use syn::spanned::Spanned;
 use syn::token::{For, In};
-use syn::{Expr, Local, Pat, Stmt, Token, braced};
+use syn::{Expr, Pat, Stmt, braced};
 
-use super::{HtmlChildrenTree, ToNodeIterator};
+use super::HtmlChildrenTree;
+use super::html_loop::{emit_loop, parse_loop_body};
 use crate::PeekValue;
-use crate::html_tree::HtmlTree;
-
-/// Determines if an expression is guaranteed to always return the same value anywhere.
-fn is_contextless_pure(expr: &Expr) -> bool {
-    match expr {
-        Expr::Lit(_) => true,
-        Expr::Path(path) => path.path.get_ident().is_none(),
-        _ => false,
-    }
-}
 
 pub struct HtmlFor {
     pat: Pat,
     iter: Expr,
-    let_stmts: Vec<Local>,
+    stmts: Vec<Stmt>,
     body: HtmlChildrenTree,
     deprecations: TokenStream,
 }
@@ -44,39 +34,12 @@ impl Parse for HtmlFor {
         let body_stream;
         braced!(body_stream in input);
 
-        let mut let_stmts = Vec::new();
-        while body_stream.peek(Token![let]) {
-            let stmt: Stmt = body_stream.parse()?;
-            match stmt {
-                Stmt::Local(local) => let_stmts.push(local),
-                _ => unreachable!("peeked Token![let] but parsed non-local statement"),
-            }
-        }
+        let (stmts, body, deprecations) = parse_loop_body(&body_stream, "for")?;
 
-        let body = HtmlChildrenTree::parse_delimited_with_nodes(&body_stream)?;
-        let deprecations = super::check_unnecessary_fragment(&body);
-        // TODO: more concise code by using if-let guards (MSRV 1.95)
-        for child in body.0.iter() {
-            let HtmlTree::Element(element) = child else {
-                continue;
-            };
-
-            let Some(key) = &element.props.special.key else {
-                continue;
-            };
-
-            if is_contextless_pure(&key.value) {
-                return Err(syn::Error::new(
-                    key.value.span(),
-                    "duplicate key for a node in a `for`-loop\nthis will create elements with \
-                     duplicate keys if the loop iterates more than once",
-                ));
-            }
-        }
         Ok(Self {
             pat,
             iter,
-            let_stmts,
+            stmts,
             body,
             deprecations,
         })
@@ -88,57 +51,11 @@ impl ToTokens for HtmlFor {
         let Self {
             pat,
             iter,
-            let_stmts,
+            stmts,
             body,
             deprecations,
         } = self;
-        let acc = Ident::new("__yew_v", iter.span());
-
-        let alloc_opt = body
-            .size_hint()
-            .filter(|&size| size > 1) // explicitly reserving space for 1 more element is redundant
-            .map(|size| quote!( #acc.reserve(#size) ));
-
-        let vlist_gen = match body.fully_keyed() {
-            Some(true) => quote! {
-                ::yew::virtual_dom::VList::__macro_new(
-                    #acc,
-                    ::std::option::Option::None,
-                    ::yew::virtual_dom::FullyKeyedState::KnownFullyKeyed
-                )
-            },
-            Some(false) => quote! {
-                ::yew::virtual_dom::VList::__macro_new(
-                    #acc,
-                    ::std::option::Option::None,
-                    ::yew::virtual_dom::FullyKeyedState::KnownMissingKeys
-                )
-            },
-            None => quote! {
-                ::yew::virtual_dom::VList::with_children(#acc, ::std::option::Option::None)
-            },
-        };
-
-        let body = body
-            .0
-            .iter()
-            .map(|child| match child.to_node_iterator_stream() {
-                Some(child) => {
-                    quote!( #acc.extend(#child) )
-                }
-                _ => {
-                    quote!( #acc.push(::std::convert::Into::into(#child)) )
-                }
-            });
-
-        tokens.extend(quote!({
-            #deprecations
-            let mut #acc = ::std::vec::Vec::<::yew::virtual_dom::VNode>::new();
-            ::std::iter::Iterator::for_each(
-                ::std::iter::IntoIterator::into_iter(#iter),
-                |#pat| { #(#let_stmts)* #alloc_opt; #(#body);* }
-            );
-            #vlist_gen
-        }))
+        let header = quote!(for #pat in #iter);
+        tokens.extend(emit_loop(header, stmts, body, deprecations));
     }
 }

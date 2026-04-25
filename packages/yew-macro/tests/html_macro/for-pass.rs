@@ -118,4 +118,276 @@ fn main() {
             <hr/>
         }
     };
+
+    // break in for loop
+    _ = ::yew::html!{
+        for i in 0..10 {
+            if i > 5 {
+                break
+            }
+            <span>{i}</span>
+        }
+    };
+
+    // continue in for loop
+    _ = ::yew::html!{
+        for i in 0..10 {
+            if i % 2 == 0 {
+                continue
+            }
+            <span>{i}</span>
+        }
+    };
+
+    // break with trailing semicolon
+    _ = ::yew::html!{
+        for i in 0..10 {
+            if i > 5 {
+                break;
+            }
+            <span>{i}</span>
+        }
+    };
+
+    // continue with trailing semicolon
+    _ = ::yew::html!{
+        for i in 0..10 {
+            if i % 2 == 0 {
+                continue;
+            }
+            <span>{i}</span>
+        }
+    };
+
+    // unbraced match arm with break
+    _ = ::yew::html!{
+        for i in 0..10 {
+            match i {
+                0 => break,
+                _ => <span>{i}</span>,
+            }
+        }
+    };
+
+    // unbraced match arm with continue
+    _ = ::yew::html!{
+        for i in 0..10 {
+            match i {
+                0 => continue,
+                _ => <span>{i}</span>,
+            }
+        }
+    };
+
+    // braced match arm with break
+    _ = ::yew::html!{
+        for i in 0..10 {
+            match i {
+                0 => { break },
+                _ => <span>{i}</span>,
+            }
+        }
+    };
+
+    // break/continue in a for body must not emit `unreachable_code` warnings even
+    // under `#[deny(unreachable_code)]`.
+    #[deny(unreachable_code)]
+    fn break_continue_no_warn() {
+        _ = ::yew::html!{
+            for i in 0..10 {
+                if i > 5 {
+                    break;
+                }
+                if i % 2 == 0 {
+                    continue;
+                }
+                <span>{i}</span>
+            }
+        };
+    }
+    break_continue_no_warn();
+
+    // Expression statement in loop body preamble (`.method(..);` for side effects).
+    _ = ::yew::html!{
+        for i in 0..5 {
+            let counter = ::std::cell::Cell::new(i);
+            counter.set(i * 2);
+            <span>{counter.get()}</span>
+        }
+    };
+
+    // Compound-assignment expression statement in loop body preamble.
+    {
+        let mut total: ::std::primitive::i32 = 0;
+        _ = ::yew::html!{
+            for i in 0..5 {
+                let current = i;
+                total += current;
+                <span>{current}</span>
+            }
+        };
+        _ = total;
+    }
+
+    // Local fn item in loop body preamble.
+    _ = ::yew::html!{
+        for i in 0..5 {
+            fn double(x: ::std::primitive::i32) -> ::std::primitive::i32 { x * 2 }
+            let v = double(i);
+            <span>{v}</span>
+        }
+    };
+
+    // Macro statement in loop body preamble (with `;`).
+    _ = ::yew::html!{
+        for _i in 0..1 {
+            ::std::stringify!(debug_marker);
+            <span>{"ok"}</span>
+        }
+    };
+
+    // Mixed interleaving: let / expr-stmt / let / html.
+    {
+        let mut acc: ::std::primitive::i32 = 0;
+        _ = ::yew::html!{
+            for i in 0..3 {
+                let x = i;
+                acc += x;
+                let y = x + 1;
+                <span>{y}</span>
+            }
+        };
+        _ = acc;
+    }
+
+    // Labeled `break` targeting an enclosing labeled loop in user code.
+    {
+        let mut outer_hit: ::std::primitive::i32 = 0;
+        'outer: for _ in 0..3 {
+            _ = ::yew::html!{
+                for i in 0..10 {
+                    if i > 2 {
+                        break 'outer;
+                    }
+                    <span>{i}</span>
+                }
+            };
+            outer_hit += 1;
+        }
+        _ = outer_hit;
+    }
+
+    // Labeled `continue` targeting an enclosing labeled loop in user code.
+    {
+        let mut outer_hit: ::std::primitive::i32 = 0;
+        'outer: for _ in 0..3 {
+            _ = ::yew::html!{
+                for i in 0..10 {
+                    if i > 2 {
+                        continue 'outer;
+                    }
+                    <span>{i}</span>
+                }
+            };
+            outer_hit += 1;
+        }
+        _ = outer_hit;
+    }
+
+    // Labeled `break 'outer` without a trailing `;` (body-top position).
+    {
+        let mut outer_hit: ::std::primitive::i32 = 0;
+        'outer: for _ in 0..3 {
+            _ = ::yew::html!{
+                for i in 0..10 {
+                    if i > 2 {
+                        break 'outer
+                    }
+                    <span>{i}</span>
+                }
+            };
+            outer_hit += 1;
+        }
+        _ = outer_hit;
+    }
+
+    // Labeled `continue 'outer` without a trailing `;` (body-top position).
+    {
+        let mut outer_hit: ::std::primitive::i32 = 0;
+        'outer: for _ in 0..3 {
+            _ = ::yew::html!{
+                for i in 0..10 {
+                    if i > 2 {
+                        continue 'outer
+                    }
+                    <span>{i}</span>
+                }
+            };
+            outer_hit += 1;
+        }
+        _ = outer_hit;
+    }
+
+    // Bare `return` (no value, no trailing `;`) at body top. Returns `()` from main.
+    fn bare_return_at_body_top() {
+        _ = ::yew::html!{
+            for _ in 0..1 {
+                return
+                <span>{"unreachable"}</span>
+            }
+        };
+    }
+    bare_return_at_body_top();
+
+    // Bare `return` in unbraced match arm.
+    fn return_in_unbraced_match_arm() {
+        _ = ::yew::html!{
+            for i in 0..10 {
+                match i {
+                    3 => return,
+                    _ => <span>{i}</span>,
+                }
+            }
+        };
+    }
+    return_in_unbraced_match_arm();
+
+    // Bare `return` in braced match arm.
+    fn return_in_braced_match_arm() {
+        _ = ::yew::html!{
+            for i in 0..10 {
+                match i {
+                    3 => { return },
+                    _ => <span>{i}</span>,
+                }
+            }
+        };
+    }
+    return_in_braced_match_arm();
+
+    // `return` with a value in preamble position (statement form with `;`).
+    fn return_value_from_preamble() -> ::std::primitive::i32 {
+        _ = ::yew::html!{
+            for i in 0..3 {
+                return i;
+                <span>{i}</span>
+            }
+        };
+        0
+    }
+    let _ = return_value_from_preamble();
+
+    // `return` with a value in unbraced match arm (value part of ExprReturn).
+    fn return_value_from_unbraced_arm() -> ::std::primitive::i32 {
+        _ = ::yew::html!{
+            for i in 0..10 {
+                match i {
+                    3 => return i,
+                    _ => <span>{i}</span>,
+                }
+            }
+        };
+        0
+    }
+    let _ = return_value_from_unbraced_arm();
 }
