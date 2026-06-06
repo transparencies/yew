@@ -181,6 +181,27 @@ impl Attributes {
         }
     }
 
+    /// Applies a value during hydration.
+    ///
+    /// Hydration assumes the DOM already matches the server-rendered HTML, so
+    /// attributes are left untouched: re-writing them would needlessly trigger
+    /// side effects. In debug builds we only assert that the existing attribute
+    /// matches the expected value. Properties are not reflected in the HTML, so
+    /// they are always set.
+    #[cfg(feature = "hydration")]
+    fn hydrate_set(el: &Element, key: &str, value: &AttributeOrProperty) {
+        match value {
+            AttributeOrProperty::Attribute(value) => {
+                debug_assert_eq!(
+                    el.get_attribute(key).as_deref(),
+                    Some(value.as_ref()),
+                    "attribute `{key}` does not match the server-rendered value during hydration",
+                );
+            }
+            AttributeOrProperty::Property(_) => Self::set(el, key, value),
+        }
+    }
+
     fn remove(el: &Element, key: &str, old_value: &AttributeOrProperty) {
         match old_value {
             AttributeOrProperty::Attribute(_) => el
@@ -217,6 +238,31 @@ impl Apply for Attributes {
             Self::IndexMap(m) => {
                 for (k, v) in m.iter() {
                     Self::set(el, k, v)
+                }
+            }
+        }
+        self
+    }
+
+    #[cfg(feature = "hydration")]
+    fn hydrate(self, _root: &BSubtree, el: &Element) -> Self {
+        #[expect(deprecated)]
+        match &self {
+            Self::Static(arr) => {
+                for (k, v) in arr.iter() {
+                    Self::hydrate_set(el, k, v);
+                }
+            }
+            Self::Dynamic { keys, values } => {
+                for (k, v) in keys.iter().zip(values.iter()) {
+                    if let Some(v) = v {
+                        Self::hydrate_set(el, k, v)
+                    }
+                }
+            }
+            Self::IndexMap(m) => {
+                for (k, v) in m.iter() {
+                    Self::hydrate_set(el, k, v)
                 }
             }
         }
